@@ -17,8 +17,14 @@ st.set_page_config(page_title="Dashboard GAM Performance", page_icon="📊", lay
 # --- INITIALISATION CLIENT API ---
 @st.cache_resource(show_spinner=False)
 def get_ad_manager_client():
-    """Charge le client API depuis le fichier local ou depuis les secrets Streamlit."""
+    """Charge le client API depuis les fichiers locaux ou recrée les fichiers via les secrets Streamlit."""
     try:
+        # --- NOUVEAUTÉ : GESTION DU FICHIER JSON ---
+        # Si le fichier JSON n'existe pas en local mais qu'il est dans les secrets, on le crée virtuellement
+        if not os.path.exists('service_account.json') and "GCP_SERVICE_ACCOUNT" in st.secrets:
+            with open('service_account.json', 'w', encoding='utf-8') as f:
+                f.write(st.secrets["GCP_SERVICE_ACCOUNT"])
+
         # 1. Mode LOCAL (sur ton PC)
         if os.path.exists('googleads.yaml'):
             return ad_manager.AdManagerClient.LoadFromStorage('googleads.yaml')
