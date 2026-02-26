@@ -33,7 +33,6 @@ if not st.session_state["password_correct"]:
     # L'utilisateur n'est pas connecté : on affiche uniquement le formulaire
     st.title("🔒 Accès restreint")
     
-    # Création du formulaire avec bouton
     with st.form("login_form"):
         st.text_input("Veuillez entrer le mot de passe pour accéder au Dashboard :", 
                       type="password", 
@@ -45,33 +44,24 @@ if not st.session_state["password_correct"]:
 # --- INITIALISATION CLIENT API ---
 @st.cache_resource(show_spinner=False)
 def get_ad_manager_client():
-    """Charge le client API depuis les fichiers locaux ou recrée les fichiers via les secrets Streamlit."""
     try:
-        # --- NOUVEAUTÉ : GESTION DU FICHIER JSON ---
-        # Si le fichier JSON n'existe pas en local mais qu'il est dans les secrets, on le crée virtuellement
         if not os.path.exists('service_account.json') and "GCP_SERVICE_ACCOUNT" in st.secrets:
             with open('service_account.json', 'w', encoding='utf-8') as f:
                 f.write(st.secrets["GCP_SERVICE_ACCOUNT"])
 
-        # 1. Mode LOCAL (sur ton PC)
         if os.path.exists('googleads.yaml'):
             return ad_manager.AdManagerClient.LoadFromStorage('googleads.yaml')
-        
-        # 2. Mode CLOUD (sur Streamlit)
         elif "GOOGLEADS_YAML" in st.secrets:
             yaml_string = st.secrets["GOOGLEADS_YAML"]
             return ad_manager.AdManagerClient.LoadFromString(yaml_string)
-            
         else:
             st.error("❌ Configuration manquante : ni fichier 'googleads.yaml' local, ni secret 'GOOGLEADS_YAML' trouvé.")
             st.stop()
-            
     except Exception as e:
         st.error(f"❌ Erreur d'initialisation de l'API : {e}")
         st.stop()
 
 # --- FONCTIONS API ---
-
 @st.cache_data(show_spinner=False)
 def fetch_advertisers():
     client = get_ad_manager_client()
@@ -79,7 +69,6 @@ def fetch_advertisers():
     target_names = ["GSO_TELE SECOURS", "GSO_STUDYRAMA", "GSO_VENTA PEIO SL", "GSO_LEROY MERLIN FRANCE"]
     names_query = ", ".join([f"'{n}'" for n in target_names])
     statement = ad_manager.StatementBuilder(version='v202602').Where(f"name IN ({names_query}) AND type = 'ADVERTISER'")
-    
     try:
         response = service.getCompaniesByStatement(statement.ToStatement())
         if 'results' in response:
@@ -93,10 +82,8 @@ def fetch_advertisers():
 def fetch_all_orders_for_adv(adv_id):
     client = get_ad_manager_client()
     service = client.GetService('OrderService', version='v202602')
-    # Historique de 2 ans pour les filtres
     start_history = (date.today() - timedelta(days=730)).strftime('%Y-%m-%d')
     statement = ad_manager.StatementBuilder(version='v202602').Where(f"advertiserId = {adv_id} AND startDateTime >= '{start_history}T00:00:00'")
-    
     response = service.getOrdersByStatement(statement.ToStatement())
     orders = []
     if 'results' in response:
@@ -107,7 +94,7 @@ def fetch_all_orders_for_adv(adv_id):
                 "name": o['name'], 
                 "year": sdt['year'], 
                 "month": sdt['month'],
-                "start_str": f"{sdt['day']:02d}/{sdt['month']:02d}/{sdt['year']}" # Formatage propre JJ/MM/AAAA
+                "start_str": f"{sdt['day']:02d}/{sdt['month']:02d}/{sdt['year']}"
             })
     return orders
 
@@ -116,24 +103,19 @@ def fetch_order_goal(order_id):
     client = get_ad_manager_client()
     li_service = client.GetService('LineItemService', version='v202602')
     statement = ad_manager.StatementBuilder(version='v202602').Where(f"orderId = {order_id}")
-    
     response = li_service.getLineItemsByStatement(statement.ToStatement())
     total = 0
     if 'results' in response:
         for li in response['results']:
-            try: 
-                total += li['primaryGoal']['units']
-            except KeyError: 
-                pass
+            try: total += li['primaryGoal']['units']
+            except KeyError: pass
     return total
 
 def fetch_report_stats(order_id):
     client = get_ad_manager_client()
     report_service = client.GetService('ReportService', version='v202602')
-    
     today_dt = date.today()
-    three_years_ago = today_dt - timedelta(days=1094) # Limite max de Google
-    
+    three_years_ago = today_dt - timedelta(days=1094)
     report_job = {'reportQuery': {
         'dimensions': ['DATE', 'DEVICE_CATEGORY_NAME', 'CREATIVE_NAME'],
         'columns': ['AD_SERVER_IMPRESSIONS', 'AD_SERVER_CLICKS', 'AD_SERVER_CTR'],
@@ -142,47 +124,31 @@ def fetch_report_stats(order_id):
         'endDate': {'year': today_dt.year, 'month': today_dt.month, 'day': today_dt.day},
         'statement': {'query': f'WHERE ORDER_ID = {order_id}'}
     }}
-    
     try:
         job = report_service.runReportJob(report_job)
         job_id = job['id']
-
-        # Boucle d'attente simplifiée avec un timeout de sécurité (ex: 60 sec)
         timeout = 60
         while timeout > 0:
             status = report_service.getReportJobStatus(job_id)
-            if status == 'COMPLETED':
-                break
+            if status == 'COMPLETED': break
             elif status == 'FAILED':
                 st.error("Le rapport a échoué chez Google.")
                 return pd.DataFrame()
             time.sleep(2)
             timeout -= 2
-            
         if timeout <= 0:
             st.error("Délai d'attente dépassé pour la génération du rapport.")
             return pd.DataFrame()
 
         url = report_service.getReportDownloadUrlWithOptions(job_id, {'exportFormat': 'CSV_DUMP'})
         r = requests.get(url)
-        
-        # Décompression propre
-        try:
-            content = gzip.decompress(r.content).decode('utf-8')
-        except OSError: # OSError est levée si ce n'est pas un vrai gzip
-            content = r.content.decode('utf-8')
+        try: content = gzip.decompress(r.content).decode('utf-8')
+        except OSError: content = r.content.decode('utf-8')
         
         df = pd.read_csv(io.StringIO(content))
-        if df.empty: 
-            return df
-        
-        # Nettoyage rigoureux des colonnes
+        if df.empty: return df
         df.columns = [c.replace('Dimension.', '').replace('Column.', '').upper().strip() for c in df.columns]
-        
-        # Suppression des lignes de totalisation
-        if 'DATE' in df.columns:
-            df = df.dropna(subset=['DATE'])
-            
+        if 'DATE' in df.columns: df = df.dropna(subset=['DATE'])
         return df
     except Exception as e:
         st.error(f"Erreur Reporting : {e}")
@@ -193,69 +159,43 @@ def fetch_creatives(order_id):
     client = get_ad_manager_client()
     lica_service = client.GetService('LineItemCreativeAssociationService', version='v202602')
     creative_service = client.GetService('CreativeService', version='v202602')
-    
     lica_resp = lica_service.getLineItemCreativeAssociationsByStatement(
         ad_manager.StatementBuilder(version='v202602').Where(f"orderId = {order_id}").ToStatement())
-    
-    if 'results' not in lica_resp: 
-        return []
-        
+    if 'results' not in lica_resp: return []
     c_ids = ",".join([str(l['creativeId']) for l in lica_resp['results']])
     c_resp = creative_service.getCreativesByStatement(
         ad_manager.StatementBuilder(version='v202602').Where(f"id IN ({c_ids})").ToStatement())
-    
     data = []
     if 'results' in c_resp:
         for c in c_resp['results']:
             img = None
             if c.__class__.__name__ in ['ImageCreative', 'ImageRedirectCreative']:
-                try: 
-                    img = c['primaryImageAsset']['assetUrl']
-                except (KeyError, AttributeError): 
-                    pass
-            
-            # --- CORRECTION ICI ---
-            # On extrait l'URL de preview de manière sécurisée pour les objets Zeep
+                try: img = c['primaryImageAsset']['assetUrl']
+                except (KeyError, AttributeError): pass
             preview_url = None
-            try:
-                preview_url = c['previewUrl']
-            except (KeyError, AttributeError):
-                pass
-                
-            data.append({
-                "name": c['name'], 
-                "image": img, 
-                "preview": preview_url
-            })
+            try: preview_url = c['previewUrl']
+            except (KeyError, AttributeError): pass
+            data.append({"name": c['name'], "image": img, "preview": preview_url})
     return data
 
 # --- INTERFACE UTILISATEUR ---
-
 with st.sidebar:
     st.header("⚙️ Sélection Campagne")
     advs = fetch_advertisers()
     adv_map = {a['name']: a['id'] for a in advs}
     sel_adv_name = st.selectbox("1. Annonceur", options=[""] + list(adv_map.keys()))
-
     sel_order_id = None
     sel_order_name = ""
-    
     if sel_adv_name:
         all_orders = fetch_all_orders_for_adv(adv_map[sel_adv_name])
-        
         if all_orders:
             years = sorted(list(set([o['year'] for o in all_orders])), reverse=True)
             sel_year = st.selectbox("2. Année de début", options=years)
-            
             months_in_year = sorted(list(set([o['month'] for o in all_orders if o['year'] == sel_year])))
-            month_names = {1:"Janvier", 2:"Février", 3:"Mars", 4:"Avril", 5:"Mai", 6:"Juin", 
-                           7:"Juillet", 8:"Août", 9:"Septembre", 10:"Octobre", 11:"Novembre", 12:"Décembre"}
-            
+            month_names = {1:"Janvier", 2:"Février", 3:"Mars", 4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août", 9:"Septembre", 10:"Octobre", 11:"Novembre", 12:"Décembre"}
             sel_month = st.selectbox("3. Mois de début", options=months_in_year, format_func=lambda x: month_names[x])
-            
             final_options = [o for o in all_orders if o['year'] == sel_year and o['month'] == sel_month]
             order_labels = {o['name']: o['id'] for o in final_options}
-            
             st.write("---")
             sel_order_name = st.selectbox(f"4. Campagne ({len(final_options)})", options=list(order_labels.keys()))
             sel_order_id = order_labels.get(sel_order_name)
@@ -273,7 +213,6 @@ if sel_adv_name and sel_order_id:
         if not df.empty:
             st.subheader(f"📊 Performances : {sel_order_name}")
             
-            # Détection dynamique des colonnes (sécurité)
             col_imp = next((c for c in df.columns if 'IMPRESSIONS' in c), None)
             col_clk = next((c for c in df.columns if 'CLICKS' in c), None)
             
@@ -281,12 +220,17 @@ if sel_adv_name and sel_order_id:
                 ti, tc = df[col_imp].sum(), df[col_clk].sum()
                 ctr = (tc/ti*100) if ti > 0 else 0
                 
-                # Metrics
+                # --- NOUVEAU 1 : JAUGE D'OBJECTIF ---
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Objectif total (Units)", f"{goal:,}")
                 m2.metric("Impressions délivrées", f"{ti:,}")
                 m3.metric("Clics", f"{tc:,}")
                 m4.metric("CTR", f"{ctr:.2f}%")
+                
+                if goal > 0:
+                    progress_pct = min(ti / goal, 1.0)
+                    st.progress(progress_pct)
+                    st.caption(f"🎯 **{progress_pct * 100:.1f}%** de l'objectif de diffusion a été atteint.")
                 
                 # --- ÉVOLUTION TEMPORELLE ---
                 st.divider()
@@ -309,29 +253,62 @@ if sel_adv_name and sel_order_id:
                 fig_evo.update_yaxes(title_text="Volume Clics", secondary_y=True, showgrid=False)
                 st.plotly_chart(fig_evo, use_container_width=True)
 
-                # --- RÉPARTITIONS ---
+                # --- NOUVEAU 2 : ANALYSE PAR JOUR DE LA SEMAINE ---
+                st.divider()
+                st.write("### 📅 Performances par jour de la semaine")
+                df_days = df.copy()
+                df_days['DayNum'] = df_days['DateObj'].dt.dayofweek
+                jour_map = {0: 'Lundi', 1: 'Mardi', 2: 'Mercredi', 3: 'Jeudi', 4: 'Vendredi', 5: 'Samedi', 6: 'Dimanche'}
+                df_days['Jour'] = df_days['DayNum'].map(jour_map)
+
+                df_grouped_days = df_days.groupby(['DayNum', 'Jour'])[[col_imp, col_clk]].sum().reset_index().sort_values('DayNum')
+                df_grouped_days['CTR'] = (df_grouped_days[col_clk] / df_grouped_days[col_imp] * 100).fillna(0)
+
+                fig_days = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_days.add_trace(go.Bar(x=df_grouped_days['Jour'], y=df_grouped_days[col_imp], name="Impressions", marker_color='#1f77b4', opacity=0.7), secondary_y=False)
+                fig_days.add_trace(go.Scatter(x=df_grouped_days['Jour'], y=df_grouped_days['CTR'], name="CTR (%)", marker_color='#2ca02c', mode='lines+markers', line=dict(width=3)), secondary_y=True)
+                
+                fig_days.update_layout(hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), margin=dict(t=30, b=0, l=0, r=0), height=350)
+                fig_days.update_xaxes(showgrid=False)
+                fig_days.update_yaxes(title_text="Volume Impressions", secondary_y=False, showgrid=True, gridcolor='rgba(255,255,255,0.1)')
+                fig_days.update_yaxes(title_text="CTR (%)", secondary_y=True, showgrid=False, tickformat=".2f")
+                st.plotly_chart(fig_days, use_container_width=True)
+
+                # --- RÉPARTITIONS (VOLUME) ---
                 st.divider()
                 c1, c2 = st.columns(2)
-                
                 with c1:
                     st.write("### 📱 Impressions / Device")
                     fig_device = px.pie(df, values=col_imp, names='DEVICE_CATEGORY_NAME', hole=0.4)
-                    fig_device.update_layout(
-                        margin=dict(t=20, b=20, l=0, r=0),
-                        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5)
-                    )
+                    fig_device.update_layout(margin=dict(t=20, b=20, l=0, r=0), legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
                     fig_device.update_traces(textposition='inside', textinfo='percent')
                     st.plotly_chart(fig_device, use_container_width=True)
                     
                 with c2:
                     st.write("### 🎨 Impressions / Création")
                     fig_creative = px.pie(df, values=col_imp, names='CREATIVE_NAME', hole=0.4)
-                    fig_creative.update_layout(
-                        margin=dict(t=20, b=20, l=0, r=0),
-                        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5)
-                    )
+                    fig_creative.update_layout(margin=dict(t=20, b=20, l=0, r=0), legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
                     fig_creative.update_traces(textposition='inside', textinfo='percent')
                     st.plotly_chart(fig_creative, use_container_width=True)
+
+                # --- NOUVEAU 3 : PALMARÈS DES CRÉATIONS (CTR) ---
+                st.divider()
+                st.write("### 🏆 Efficacité des créations (CTR)")
+                df_creative_perf = df.groupby('CREATIVE_NAME')[[col_imp, col_clk]].sum().reset_index()
+                df_creative_perf['CTR'] = (df_creative_perf[col_clk] / df_creative_perf[col_imp] * 100).fillna(0)
+                # On trie pour avoir le meilleur CTR en haut
+                df_creative_perf = df_creative_perf.sort_values('CTR', ascending=True)
+
+                fig_ctr_creative = px.bar(df_creative_perf, x='CTR', y='CREATIVE_NAME', orientation='h', text='CTR')
+                fig_ctr_creative.update_traces(marker_color='#ff7f0e', texttemplate='%{text:.2f}%', textposition='outside')
+                fig_ctr_creative.update_layout(
+                    xaxis_title="Taux de clic (CTR %)", yaxis_title="",
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)')
+                )
+                st.plotly_chart(fig_ctr_creative, use_container_width=True)
                     
                 # --- VISUELS ---
                 st.divider()
@@ -340,12 +317,10 @@ if sel_adv_name and sel_order_id:
                     cols = st.columns(3)
                     for i, c in enumerate(creats):
                         with cols[i % 3]:
-                            with st.container(border=True): # Ajout d'un cadre esthétique
+                            with st.container(border=True):
                                 st.markdown(f"**{c['name']}**")
-                                if c['image']: 
-                                    st.image(c['image'], use_container_width=True)
-                                elif c['preview']: 
-                                    st.link_button("👁️ Ouvrir la Preview", c['preview'], use_container_width=True)
+                                if c['image']: st.image(c['image'], use_container_width=True)
+                                elif c['preview']: st.link_button("👁️ Ouvrir la Preview", c['preview'], use_container_width=True)
                 else:
                     st.info("Aucun visuel associé à cette campagne n'a été trouvé.")
             else:
