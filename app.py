@@ -14,6 +14,31 @@ import gzip
 # --- CONFIGURATION PAGE ---
 st.set_page_config(page_title="Dashboard GAM Performance", page_icon="📊", layout="wide")
 
+# --- SYSTÈME DE CONNEXION ---
+def check_password():
+    """Vérifie si le mot de passe entré correspond à celui des secrets."""
+    # En local, on peut utiliser un mot de passe par défaut pour tester
+    correct_password = st.secrets.get("APP_PASSWORD", "admin123")
+    
+    if st.session_state["pwd_input"] == correct_password:
+        st.session_state["password_correct"] = True
+        del st.session_state["pwd_input"]  # On efface la saisie par sécurité
+    else:
+        st.error("🔒 Mot de passe incorrect.")
+
+if "password_correct" not in st.session_state:
+    # Première visite : on initialise l'état à False
+    st.session_state["password_correct"] = False
+
+if not st.session_state["password_correct"]:
+    # L'utilisateur n'est pas connecté : on affiche uniquement le formulaire
+    st.title("🔒 Accès restreint")
+    st.text_input("Veuillez entrer le mot de passe pour accéder au Dashboard :", 
+                  type="password", 
+                  key="pwd_input", 
+                  on_change=check_password)
+    st.stop()  # Stoppe net l'exécution du reste du code !
+
 # --- INITIALISATION CLIENT API ---
 @st.cache_resource(show_spinner=False)
 def get_ad_manager_client():
