@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 from googleads import ad_manager
 from datetime import datetime, date, timedelta
@@ -16,11 +17,23 @@ st.set_page_config(page_title="Dashboard GAM Performance", page_icon="📊", lay
 # --- INITIALISATION CLIENT API ---
 @st.cache_resource(show_spinner=False)
 def get_ad_manager_client():
-    """Charge le client API une seule fois et le met en cache."""
+    """Charge le client API depuis le fichier local ou depuis les secrets Streamlit."""
     try:
-        return ad_manager.AdManagerClient.LoadFromStorage('googleads.yaml')
+        # 1. Mode LOCAL (sur ton PC)
+        if os.path.exists('googleads.yaml'):
+            return ad_manager.AdManagerClient.LoadFromStorage('googleads.yaml')
+        
+        # 2. Mode CLOUD (sur Streamlit)
+        elif "GOOGLEADS_YAML" in st.secrets:
+            yaml_string = st.secrets["GOOGLEADS_YAML"]
+            return ad_manager.AdManagerClient.LoadFromString(yaml_string)
+            
+        else:
+            st.error("❌ Configuration manquante : ni fichier 'googleads.yaml' local, ni secret 'GOOGLEADS_YAML' trouvé.")
+            st.stop()
+            
     except Exception as e:
-        st.error(f"❌ Erreur d'initialisation de l'API : {e}. Vérifiez la présence de 'googleads.yaml'.")
+        st.error(f"❌ Erreur d'initialisation de l'API : {e}")
         st.stop()
 
 # --- FONCTIONS API ---
