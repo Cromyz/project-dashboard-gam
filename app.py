@@ -17,7 +17,6 @@ st.set_page_config(page_title="Dashboard GAM Performance", page_icon="📊", lay
 # --- SYSTÈME DE CONNEXION ---
 def check_password():
     """Vérifie si le mot de passe entré correspond à celui des secrets."""
-    # En local, on peut utiliser un mot de passe par défaut pour tester
     correct_password = st.secrets.get("APP_PASSWORD", "admin123")
     
     if st.session_state["pwd_input"] == correct_password:
@@ -33,10 +32,14 @@ if "password_correct" not in st.session_state:
 if not st.session_state["password_correct"]:
     # L'utilisateur n'est pas connecté : on affiche uniquement le formulaire
     st.title("🔒 Accès restreint")
-    st.text_input("Veuillez entrer le mot de passe pour accéder au Dashboard :", 
-                  type="password", 
-                  key="pwd_input", 
-                  on_change=check_password)
+    
+    # Création du formulaire avec bouton
+    with st.form("login_form"):
+        st.text_input("Veuillez entrer le mot de passe pour accéder au Dashboard :", 
+                      type="password", 
+                      key="pwd_input")
+        st.form_submit_button("Valider", on_click=check_password)
+        
     st.stop()  # Stoppe net l'exécution du reste du code !
 
 # --- INITIALISATION CLIENT API ---
