@@ -1,3 +1,5 @@
 streamlit
-pandas
 googleads
+pandas
+plotly
+requests
